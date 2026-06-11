@@ -207,16 +207,22 @@ export default function StyleDesign() {
               )}
             </div>
 
-            {showPreview && currentLayout && (
+            {(showPreview || currentLayout) && currentLayout && (
               <div className="mt-4 p-4 bg-stone-50 rounded-xl animate-slide-up">
-                <h4 className="font-medium text-gray-700 mb-2">版式元素</h4>
-                <div className="grid grid-cols-4 gap-2">
+                <h4 className="font-medium text-gray-700 mb-3">版式元素详情</h4>
+                <div className="grid grid-cols-2 gap-3">
                   {currentLayout.elements.map((el, idx) => (
-                    <div key={el.id} className="bg-white p-3 rounded-lg text-center">
-                      <div className="text-xs text-gray-400 mb-1">元素 {idx + 1}</div>
-                      <div className="text-sm font-medium text-gray-700 capitalize">{el.type}</div>
-                      <div className="text-xs text-gray-400 mt-1">
-                        {el.width}×{el.height}
+                    <div key={el.id} className="bg-white p-3 rounded-lg border border-stone-100">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-400">元素 {idx + 1}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-primary-50 text-primary-800 capitalize">{el.type}</span>
+                      </div>
+                      <div className="text-sm font-medium text-gray-800 line-clamp-1 mb-1">
+                        {el.content && (el.content.startsWith('http') ? '[图片素材]' : el.content.length > 20 ? el.content.slice(0, 20) + '...' : el.content)}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-gray-400">
+                        <span>位置: ({el.x}, {el.y})</span>
+                        <span>尺寸: {el.width}×{el.height}</span>
                       </div>
                     </div>
                   ))}

@@ -1,8 +1,39 @@
 import { create } from 'zustand';
-import type { Project, Material, ColorScheme, DesignStyle, DesignVersion, ExportConfig, Review, ReviewComment, ProofreadReport } from '@/types';
+import type { Project, Material, ColorScheme, DesignStyle, DesignVersion, ExportConfig, Review, ReviewComment, ProofreadReport, ExportFile } from '@/types';
 import { mockProjects, mockColorSchemes } from '@/utils/mockData';
 import { generateColorScheme } from '@/utils/colorUtils';
 import { createExportPackage, getTimeAgo } from '@/utils/exportUtils';
+
+const STORAGE_KEY = 'museum_creative_design_platform_v1';
+
+interface PersistedState {
+  projects: Project[];
+  currentProjectId: string | null;
+  activeTab: string;
+  exportHistory: ExportFile[];
+}
+
+const loadFromStorage = (): PersistedState | null => {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null;
+    if (!raw) return null;
+    return JSON.parse(raw) as PersistedState;
+  } catch {
+    return null;
+  }
+};
+
+const saveToStorage = (state: PersistedState) => {
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+  } catch {
+    // ignore
+  }
+};
+
+const persisted = loadFromStorage();
 
 interface ProjectState {
   projects: Project[];
@@ -12,6 +43,7 @@ interface ProjectState {
   error: string | null;
   proofreadReport: ProofreadReport | null;
   activeTab: string;
+  exportHistory: ExportFile[];
   
   setCurrentProject: (id: string) => void;
   updateProject: (data: Partial<Project>) => void;
@@ -27,11 +59,14 @@ interface ProjectState {
   setReviewScore: (versionId: string, score: number) => void;
   setReviewStatus: (versionId: string, status: 'pending' | 'approved' | 'rejected') => void;
   updateExportConfig: (config: Partial<ExportConfig>) => void;
-  exportProject: () => Promise<void>;
+  exportProject: (files?: ExportFile[]) => Promise<void>;
+  addExportHistory: (files: ExportFile[]) => void;
+  clearExportHistory: () => void;
   setProofreadReport: (report: ProofreadReport | null) => void;
   setActiveTab: (tab: string) => void;
   createNewProject: (name: string, museumName: string) => void;
   updateProgress: () => void;
+  _persist: () => void;
 }
 
 const calculateProgress = (project: Project): number => {
@@ -46,13 +81,16 @@ const calculateProgress = (project: Project): number => {
 };
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
-  projects: mockProjects,
-  currentProjectId: mockProjects[0]?.id || null,
-  currentProject: mockProjects[0] || null,
+  projects: persisted?.projects && persisted.projects.length > 0 ? persisted.projects : mockProjects,
+  currentProjectId: persisted?.currentProjectId || (persisted?.projects && persisted.projects.length > 0 ? persisted.projects[0].id : (mockProjects[0]?.id || null)),
+  currentProject: (persisted?.projects && persisted.projects.length > 0 
+    ? (persisted.projects.find(p => p.id === (persisted.currentProjectId || persisted.projects[0].id)) || null)
+    : mockProjects[0] || null),
   isLoading: false,
   error: null,
   proofreadReport: null,
-  activeTab: 'dashboard',
+  activeTab: persisted?.activeTab || 'dashboard',
+  exportHistory: persisted?.exportHistory || [],
 
   setCurrentProject: (id: string) => {
     const project = get().projects.find(p => p.id === id);
@@ -60,6 +98,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentProjectId: id,
       currentProject: project || null,
     });
+    get()._persist();
   },
 
   updateProject: (data: Partial<Project>) => {
@@ -78,6 +117,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         progress: calculateProgress(updatedCurrent)
       } : null,
     });
+    get()._persist();
   },
 
   addMaterial: (material: Material) => {
@@ -102,6 +142,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         progress: calculateProgress(updatedCurrent)
       } : null,
     });
+    get()._persist();
   },
 
   removeMaterial: (id: string) => {
@@ -126,6 +167,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         progress: calculateProgress(updatedCurrent)
       } : null,
     });
+    get()._persist();
   },
 
   setStyle: (style: DesignStyle) => {
@@ -136,15 +178,97 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { currentProject } = get();
     if (!currentProject) return;
 
+    const style = currentProject.currentStyle;
+    const exhibitMaterial = currentProject.materials.find(m => m.type === 'exhibit');
+    const exhibitImage = exhibitMaterial?.url || `https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=${encodeURIComponent(style + ' style museum cultural relic artifact elegant traditional')}&image_size=square_hd`;
+
+    const styleNames: Record<string, string> = {
+      elegant: '典雅',
+      playful: '童趣',
+      festive: '节庆',
+      minimal: '极简',
+    };
+
+    const createPreviewUrl = (type: string, name: string) => {
+      return `https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=${encodeURIComponent(`${styleNames[style]} style ${type} ${name} packaging design for museum cultural product traditional chinese aesthetic ${currentProject.museumName}`)}&image_size=landscape_4_3`;
+    };
+
+    const layouts: DesignVersion['layouts'] = [
+      {
+        id: `l_box_${Date.now()}`,
+        type: 'box',
+        name: '产品包装盒',
+        size: { width: 200, height: 150, unit: 'mm' },
+        previewUrl: createPreviewUrl('gift box', '包装盒'),
+        elements: [
+          { id: 'e1', type: 'image', x: 50, y: 20, width: 100, height: 100, content: exhibitImage, style: { borderRadius: '8px' } },
+          { id: 'e2', type: 'text', x: 20, y: 130, width: 160, height: 15, content: currentProject.name, style: { fontSize: '14px', fontWeight: 'bold' } },
+          { id: 'e3', type: 'text', x: 20, y: 145, width: 160, height: 10, content: currentProject.museumName, style: { fontSize: '10px', opacity: '0.7' } },
+        ]
+      },
+      {
+        id: `l_tag_${Date.now()}`,
+        type: 'tag',
+        name: '产品吊牌',
+        size: { width: 60, height: 100, unit: 'mm' },
+        previewUrl: createPreviewUrl('hang tag label', '吊牌'),
+        elements: [
+          { id: 'e1', type: 'shape', x: 25, y: 5, width: 10, height: 10, content: 'hole', style: { borderRadius: '50%', backgroundColor: '#f5f0e6' } },
+          { id: 'e2', type: 'image', x: 10, y: 20, width: 40, height: 40, content: exhibitImage, style: { borderRadius: '4px' } },
+          { id: 'e3', type: 'text', x: 5, y: 65, width: 50, height: 15, content: currentProject.museumName, style: { fontSize: '9px', textAlign: 'center' } },
+          { id: 'e4', type: 'text', x: 5, y: 82, width: 50, height: 12, content: '￥99.00', style: { fontSize: '12px', fontWeight: 'bold', color: '#8B2323' } },
+        ]
+      },
+      {
+        id: `l_sticker_${Date.now()}`,
+        type: 'sticker',
+        name: '装饰贴纸',
+        size: { width: 80, height: 80, unit: 'mm' },
+        previewUrl: createPreviewUrl('sticker decal', '贴纸'),
+        elements: [
+          { id: 'e1', type: 'pattern', x: 0, y: 0, width: 80, height: 80, content: 'border', style: { borderStyle: 'dashed', borderWidth: '2px' } },
+          { id: 'e2', type: 'image', x: 15, y: 15, width: 50, height: 50, content: exhibitImage, style: { borderRadius: '50%' } },
+          { id: 'e3', type: 'text', x: 10, y: 68, width: 60, height: 10, content: currentProject.museumName, style: { fontSize: '8px', textAlign: 'center' } },
+        ]
+      },
+      {
+        id: `l_bag_${Date.now()}`,
+        type: 'bag',
+        name: '手提袋',
+        size: { width: 300, height: 400, unit: 'mm' },
+        previewUrl: createPreviewUrl('shopping tote bag', '手提袋'),
+        elements: [
+          { id: 'e1', type: 'shape', x: 100, y: 10, width: 100, height: 30, content: 'handle', style: { borderRadius: '15px', border: '3px solid #8B2323' } },
+          { id: 'e2', type: 'image', x: 75, y: 80, width: 150, height: 150, content: exhibitImage, style: { borderRadius: '12px' } },
+          { id: 'e3', type: 'text', x: 50, y: 250, width: 200, height: 30, content: currentProject.name, style: { fontSize: '20px', fontWeight: 'bold', textAlign: 'center' } },
+          { id: 'e4', type: 'text', x: 50, y: 290, width: 200, height: 20, content: currentProject.museumName, style: { fontSize: '14px', textAlign: 'center', opacity: '0.7' } },
+          { id: 'e5', type: 'text', x: 50, y: 330, width: 200, height: 20, content: '承千年文脉 · 藏一世匠心', style: { fontSize: '12px', textAlign: 'center', fontStyle: 'italic' } },
+        ]
+      },
+      {
+        id: `l_card_${Date.now()}`,
+        type: 'card',
+        name: '说明卡',
+        size: { width: 120, height: 180, unit: 'mm' },
+        previewUrl: createPreviewUrl('information card brochure', '说明卡'),
+        elements: [
+          { id: 'e1', type: 'text', x: 10, y: 10, width: 100, height: 20, content: currentProject.name, style: { fontSize: '14px', fontWeight: 'bold', textAlign: 'center' } },
+          { id: 'e2', type: 'image', x: 20, y: 40, width: 80, height: 60, content: exhibitImage, style: { borderRadius: '6px' } },
+          { id: 'e3', type: 'text', x: 10, y: 110, width: 100, height: 50, content: exhibitMaterial?.description || '精选馆藏文物元素，融合现代设计美学，让传统文化走入日常生活。', style: { fontSize: '10px', lineHeight: '1.5' } },
+          { id: 'e4', type: 'text', x: 10, y: 165, width: 100, height: 12, content: currentProject.museumName, style: { fontSize: '10px', textAlign: 'center', opacity: '0.6' } },
+        ]
+      }
+    ];
+
     const newVersion: DesignVersion = {
       id: `v_${Date.now()}`,
       version: currentProject.versions.length + 1,
-      style: currentProject.currentStyle,
-      layouts: [],
+      style: style,
+      layouts,
       colorScheme: currentProject.colorScheme,
       createdAt: new Date().toISOString(),
       creator: '当前用户',
-      description: '自动生成版式',
+      description: `自动生成${styleNames[style]}风格全套5种版式`,
     };
 
     const updatedVersions = [...currentProject.versions, newVersion];
@@ -249,6 +373,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projects: updatedProjects,
       currentProject: updatedCurrent || null,
     });
+    get()._persist();
   },
 
   setReviewScore: (versionId: string, score: number) => {
@@ -288,6 +413,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projects: updatedProjects,
       currentProject: updatedCurrent || null,
     });
+    get()._persist();
   },
 
   setReviewStatus: (versionId: string, status: 'pending' | 'approved' | 'rejected') => {
@@ -320,6 +446,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         progress: calculateProgress(updatedCurrent)
       } : null,
     });
+    get()._persist();
   },
 
   updateExportConfig: (config: Partial<ExportConfig>) => {
@@ -331,26 +458,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
 
-  exportProject: async () => {
-    const { currentProject } = get();
-    if (!currentProject) return;
-
-    set({ isLoading: true });
-    try {
-      await createExportPackage(currentProject, currentProject.exportConfig);
-    } catch (error) {
-      set({ error: '导出失败，请重试' });
-    } finally {
-      set({ isLoading: false });
-    }
-  },
-
   setProofreadReport: (report: ProofreadReport | null) => {
     set({ proofreadReport: report });
   },
 
   setActiveTab: (tab: string) => {
     set({ activeTab: tab });
+    get()._persist();
   },
 
   createNewProject: (name: string, museumName: string) => {
@@ -381,6 +495,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentProjectId: newProject.id,
       currentProject: newProject,
     }));
+    get()._persist();
   },
 
   updateProgress: () => {
@@ -395,6 +510,46 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({
       projects: updatedProjects,
       currentProject: { ...currentProject, progress },
+    });
+    get()._persist();
+  },
+
+  exportProject: async (files?: ExportFile[]) => {
+    const { currentProject } = get();
+    if (!currentProject) return;
+
+    set({ isLoading: true });
+    try {
+      await createExportPackage(currentProject, currentProject.exportConfig);
+      if (files && files.length > 0) {
+        get().addExportHistory(files);
+      }
+    } catch (error) {
+      set({ error: '导出失败，请重试' });
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  addExportHistory: (files: ExportFile[]) => {
+    set(state => ({
+      exportHistory: [...files, ...state.exportHistory].slice(0, 100)
+    }));
+    get()._persist();
+  },
+
+  clearExportHistory: () => {
+    set({ exportHistory: [] });
+    get()._persist();
+  },
+
+  _persist: () => {
+    const state = get();
+    saveToStorage({
+      projects: state.projects,
+      currentProjectId: state.currentProjectId,
+      activeTab: state.activeTab,
+      exportHistory: state.exportHistory,
     });
   },
 }));

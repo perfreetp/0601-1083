@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Image, 
@@ -22,7 +22,10 @@ const navItems = [
 ];
 
 export const Sidebar = () => {
-  const { activeTab, setActiveTab, currentProject } = useProjectStore();
+  const location = useLocation();
+  const { setActiveTab, currentProject } = useProjectStore();
+  
+  const activeTab = navItems.find(item => item.path === location.pathname)?.id || 'dashboard';
 
   return (
     <aside className="w-64 bg-white border-r border-stone-200 flex flex-col h-screen fixed left-0 top-0 z-40">

@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { Upload, Image, FileText, Shield, X, Search, Plus, CheckCircle2, Loader2 } from 'lucide-react';
+import { Upload, Image, FileText, Shield, X, Search, Plus, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { useProjectStore } from '@/store/useProjectStore';
 import { MaterialCard } from '@/components/common/MaterialCard';
 import { cn } from '@/lib/utils';
@@ -20,7 +20,48 @@ const typeConfig: Record<MaterialType, { label: string; color: string }> = {
   auth: { label: '授权', color: 'bg-orange-500' },
 };
 
-interface UploadItem { id: string; file: File; progress: number; status: 'uploading' | 'success'; type: MaterialType; preview?: string; }
+interface UploadItem { id: string; file: File; progress: number; status: 'uploading' | 'success' | 'error'; type: MaterialType; preview?: string; content?: string; errorMsg?: string; }
+
+const scopeKeywords = [
+  '纪念品包装', '文具', '饰品', '家居用品', '服装', '数码配件',
+  '食品包装', '茶具', '丝绸', '陶瓷', '印刷品', '数字产品',
+  '线上销售', '线下销售', '宣传推广', '商品开发', '文创产品',
+  '授权品类', '授权范围', '使用范围', '适用范围',
+];
+
+const extractAuthScopes = (text: string): string[] => {
+  const found: string[] = [];
+  for (const keyword of scopeKeywords) {
+    if (text.includes(keyword) && !found.includes(keyword)) {
+      found.push(keyword);
+    }
+  }
+  
+  const patterns = [
+    /(?:授权范围|授权品类|使用范围|适用范围)[：:]\s*([^\n。；;]+)/,
+    /(?:品类|产品)[：:]\s*([^\n。；;]+)/,
+  ];
+  
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const items = match[1].split(/[、,，；;\/]/).map(s => s.trim()).filter(Boolean);
+      for (const item of items) {
+        if (item.length <= 10 && !found.includes(item)) {
+          found.push(item);
+        }
+      }
+    }
+  }
+  
+  if (found.length === 0) {
+    if (text.includes('文创') || text.includes('文化')) found.push('文创产品');
+    if (text.includes('销售')) found.push('线上线下销售');
+    if (text.includes('宣传') || text.includes('推广')) found.push('宣传推广');
+  }
+  
+  return found.slice(0, 8);
+};
 
 export default function Material() {
   const { currentProject, addMaterial, removeMaterial } = useProjectStore();
@@ -40,6 +81,15 @@ export default function Material() {
     return matchesTab && matchesSearch;
   });
 
+  const readTextFile = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(String(e.target?.result || ''));
+      reader.onerror = () => reject(new Error('读取文件失败'));
+      reader.readAsText(file, 'UTF-8');
+    });
+  };
+
   const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); }, []);
   const handleDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); }, []);
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -47,38 +97,74 @@ export default function Material() {
     handleFiles(Array.from(e.dataTransfer.files));
   }, []);
 
-  const handleFiles = (files: File[]) => {
-    const newItems: UploadItem[] = files.map((file, index) => ({
-      id: `upload_${Date.now()}_${index}`, file, progress: 0, status: 'uploading', type: uploadType,
-      preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+  const handleFiles = async (files: File[]) => {
+    const newItems: UploadItem[] = await Promise.all(files.map(async (file, index) => {
+      const item: UploadItem = {
+        id: `upload_${Date.now()}_${index}`,
+        file,
+        progress: 0,
+        status: 'uploading',
+        type: uploadType,
+        preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+      };
+      
+      if ((uploadType === 'copy' || uploadType === 'auth') && 
+          (file.type.includes('text') || file.name.endsWith('.txt') || file.name.endsWith('.md'))) {
+        try {
+          const text = await readTextFile(file);
+          item.content = text;
+        } catch {
+          // ignore
+        }
+      }
+      
+      return item;
     }));
+    
     setUploadItems(prev => [...prev, ...newItems]);
     setShowUploadModal(true);
-    newItems.forEach(item => simulateUpload(item.id));
+    
+    for (const item of newItems) {
+      await simulateUpload(item);
+    }
   };
 
-  const simulateUpload = (itemId: string) => {
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.random() * 20 + 10;
-      if (progress >= 100) {
-        progress = 100; clearInterval(interval);
-        setUploadItems(prev => prev.map(item => {
-          if (item.id === itemId) {
-            addMaterial({
-              id: `m_${Date.now()}`, type: item.type,
-              name: item.file.name.replace(/\.[^/.]+$/, ''),
-              url: item.preview, description: '新上传的素材',
-              tags: ['新上传'], createdAt: new Date().toISOString(),
-            });
-            return { ...item, progress: 100, status: 'success' };
-          }
-          return item;
-        }));
-      } else {
-        setUploadItems(prev => prev.map(item => item.id === itemId ? { ...item, progress } : item));
-      }
-    }, 150);
+  const simulateUpload = async (uploadItem: UploadItem) => {
+    return new Promise<void>((resolve) => {
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += Math.random() * 20 + 10;
+        if (progress >= 100) {
+          progress = 100;
+          clearInterval(interval);
+          
+          const isAuth = uploadItem.type === 'auth';
+          const scopes = isAuth && uploadItem.content ? extractAuthScopes(uploadItem.content) : undefined;
+          
+          addMaterial({
+            id: `m_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            type: uploadItem.type,
+            name: uploadItem.file.name.replace(/\.[^/.]+$/, ''),
+            url: uploadItem.preview,
+            content: uploadItem.content,
+            description: isAuth ? (uploadItem.content ? '授权文件已解析' : '新上传的授权文件') : 
+                        uploadItem.content ? '文案内容已读取' : '新上传的素材',
+            tags: ['新上传', ...(isAuth && scopes ? ['已解析授权范围'] : [])],
+            authScope: scopes,
+            createdAt: new Date().toISOString(),
+          });
+          
+          setUploadItems(prev => prev.map(item => 
+            item.id === uploadItem.id ? { ...item, progress: 100, status: 'success' } : item
+          ));
+          resolve();
+        } else {
+          setUploadItems(prev => prev.map(item => 
+            item.id === uploadItem.id ? { ...item, progress } : item
+          ));
+        }
+      }, 150);
+    });
   };
 
   const stats = [
@@ -95,7 +181,7 @@ export default function Material() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-serif font-bold text-gray-900 mb-2">素材管理</h1>
-          <p className="text-gray-500">管理项目素材，支持上传、分类、搜索和预览</p>
+          <p className="text-gray-500">管理项目素材，支持上传、分类、搜索和预览；文案和授权文件会自动读取内容</p>
         </div>
         <div className="flex gap-3">
           <div className="relative">
@@ -106,7 +192,7 @@ export default function Material() {
           <button onClick={() => document.getElementById('fileInput')?.click()} className="btn-primary flex items-center gap-2">
             <Plus className="w-5 h-5" /> 上传素材
           </button>
-          <input id="fileInput" type="file" multiple accept="image/*,.txt,.doc,.docx,.pdf" className="hidden"
+          <input id="fileInput" type="file" multiple accept="image/*,.txt,.md,.doc,.docx,.pdf,.rtf" className="hidden"
             onChange={(e) => e.target.files && handleFiles(Array.from(e.target.files))} />
         </div>
       </div>
@@ -148,10 +234,14 @@ export default function Material() {
           <div className={cn('w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300', isDragging ? 'bg-primary-100 scale-110' : 'bg-stone-100')}>
             <Upload className={cn('w-7 h-7 transition-colors', isDragging ? 'text-primary-600' : 'text-gray-400')} />
           </div>
-          <p className="font-medium text-gray-700">{isDragging ? '松开鼠标上传文件' : '拖拽文件到此处上传'}</p>
-          <p className="text-sm text-gray-500">支持 JPG、PNG、GIF、PDF、TXT 等格式</p>
+          <p className="font-medium text-gray-700">{isDragging ? '松开鼠标上传文件' : '拖拽文件到此处上传，或点击右上角按钮'}</p>
+          <p className="text-sm text-gray-500">
+            {uploadType === 'copy' || uploadType === 'auth' 
+              ? 'TXT/MD/PDF/DOC等文本文件会自动读取内容，授权文件会自动解析授权范围' 
+              : '支持 JPG、PNG、GIF、PDF、TXT 等格式，图片会生成预览'}
+          </p>
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-xs text-gray-400">类型:</span>
+            <span className="text-xs text-gray-400">当前上传类型:</span>
             {(['exhibit', 'pattern', 'copy', 'auth'] as MaterialType[]).map((type) => (
               <button key={type} onClick={() => setUploadType(type)}
                 className={cn('px-3 py-1 rounded-full text-xs font-medium transition-all',
@@ -159,6 +249,12 @@ export default function Material() {
                 )}>{typeConfig[type].label}</button>
             ))}
           </div>
+          {(uploadType === 'copy' || uploadType === 'auth') && (
+            <div className="flex items-center gap-1 mt-1 px-3 py-1.5 bg-teal-50 rounded-full text-xs text-teal-700">
+              <AlertCircle className="w-3.5 h-3.5" />
+              文本模式：上传后自动读取文件内容
+            </div>
+          )}
         </div>
       </div>
 
@@ -173,7 +269,7 @@ export default function Material() {
       ) : (
         <div className="text-center py-16">
           <Image className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <h3 className="text-lg font-medium text-gray-700 mb-2">暂无素材</h3>
+          <h3 className="text-lg font-medium text-gray-700 mb-2">暂无{activeTab === 'all' ? '' : typeConfig[activeTab as MaterialType]?.label}素材</h3>
           <p className="text-gray-500 mb-4">点击上传按钮或拖拽文件开始添加</p>
           <button onClick={() => document.getElementById('fileInput')?.click()} className="btn-primary">
             <Plus className="w-4 h-4 inline mr-2" /> 添加第一个素材
@@ -205,21 +301,38 @@ export default function Material() {
                     <div className="flex items-center gap-2 mt-1">
                       <div className="flex-1 h-2 bg-stone-200 rounded-full overflow-hidden">
                         <div className={cn('h-full rounded-full transition-all duration-300',
-                          item.status === 'success' ? 'bg-green-500' : 'bg-primary-500'
+                          item.status === 'success' ? 'bg-green-500' : 
+                          item.status === 'error' ? 'bg-red-500' : 'bg-primary-500'
                         )} style={{ width: `${item.progress}%` }} />
                       </div>
                       <span className="text-xs text-gray-500 w-12 text-right">{Math.round(item.progress)}%</span>
                     </div>
+                    {item.content && item.status === 'success' && (
+                      <p className="text-[10px] text-teal-600 mt-1 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        {item.type === 'auth' ? `已读取内容，解析到 ${item.content.length > 0 ? '授权范围' : '文本'}` : `已读取文本内容 (${item.content.length}字)`}
+                      </p>
+                    )}
                   </div>
                   {item.status === 'success' ? (
                     <CheckCircle2 className="w-5 h-5 text-green-500" />
+                  ) : item.status === 'error' ? (
+                    <AlertCircle className="w-5 h-5 text-red-500" />
                   ) : (
                     <Loader2 className="w-5 h-5 text-primary-500 animate-spin" />
                   )}
                 </div>
               ))}
             </div>
-            <div className="p-4 border-t border-stone-200 flex justify-end">
+            <div className="p-4 border-t border-stone-200 flex justify-between">
+              <div className="text-xs text-gray-500">
+                {uploadItems.filter(i => i.status === 'success').length} / {uploadItems.length} 完成
+                {uploadItems.some(i => i.content) && uploadItems.filter(i => i.status === 'success').length > 0 && (
+                  <span className="ml-2 text-teal-600">
+                    (含文本内容)
+                  </span>
+                )}
+              </div>
               <button onClick={() => setShowUploadModal(false)} className="btn-secondary">关闭</button>
             </div>
           </div>

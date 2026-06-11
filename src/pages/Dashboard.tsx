@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Image,
@@ -35,11 +36,13 @@ const statusConfig = {
 };
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const { projects, currentProject, setActiveTab } = useProjectStore();
   const [hoveredAction, setHoveredAction] = useState<string | null>(null);
 
   const handleQuickAction = (path: string, tabId: string) => {
     setActiveTab(tabId);
+    navigate(path);
   };
 
   const stats = [
