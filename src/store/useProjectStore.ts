@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Project, Material, ColorScheme, DesignStyle, DesignVersion, ExportConfig, Review, ReviewComment, ProofreadReport, ExportFile } from '@/types';
+import type { Project, Material, ColorScheme, DesignStyle, DesignVersion, ExportConfig, Review, ReviewComment, ProofreadReport, ExportFile, DeliveryRecord } from '@/types';
 import { mockProjects, mockColorSchemes } from '@/utils/mockData';
 import { generateColorScheme } from '@/utils/colorUtils';
 import { createExportPackage, getTimeAgo } from '@/utils/exportUtils';
@@ -10,7 +10,7 @@ interface PersistedState {
   projects: Project[];
   currentProjectId: string | null;
   activeTab: string;
-  exportHistory: ExportFile[];
+  deliveryRecords: DeliveryRecord[];
 }
 
 const loadFromStorage = (): PersistedState | null => {
@@ -43,12 +43,13 @@ interface ProjectState {
   error: string | null;
   proofreadReport: ProofreadReport | null;
   activeTab: string;
-  exportHistory: ExportFile[];
+  deliveryRecords: DeliveryRecord[];
   
   setCurrentProject: (id: string) => void;
   updateProject: (data: Partial<Project>) => void;
   addMaterial: (material: Material) => void;
   removeMaterial: (id: string) => void;
+  updateMaterial: (id: string, data: Partial<Material>) => void;
   setStyle: (style: DesignStyle) => void;
   generateLayouts: () => void;
   setColorScheme: (scheme: ColorScheme) => void;
@@ -59,9 +60,8 @@ interface ProjectState {
   setReviewScore: (versionId: string, score: number) => void;
   setReviewStatus: (versionId: string, status: 'pending' | 'approved' | 'rejected') => void;
   updateExportConfig: (config: Partial<ExportConfig>) => void;
-  exportProject: (files?: ExportFile[]) => Promise<void>;
-  addExportHistory: (files: ExportFile[]) => void;
-  clearExportHistory: () => void;
+  addDeliveryRecord: (record: DeliveryRecord) => void;
+  clearDeliveryRecords: () => void;
   setProofreadReport: (report: ProofreadReport | null) => void;
   setActiveTab: (tab: string) => void;
   createNewProject: (name: string, museumName: string) => void;
@@ -90,7 +90,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   error: null,
   proofreadReport: null,
   activeTab: persisted?.activeTab || 'dashboard',
-  exportHistory: persisted?.exportHistory || [],
+  deliveryRecords: persisted?.deliveryRecords || [],
 
   setCurrentProject: (id: string) => {
     const project = get().projects.find(p => p.id === id);
@@ -166,6 +166,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...updatedCurrent,
         progress: calculateProgress(updatedCurrent)
       } : null,
+    });
+    get()._persist();
+  },
+
+  updateMaterial: (id: string, data: Partial<Material>) => {
+    const { currentProjectId, projects } = get();
+    if (!currentProjectId) return;
+
+    const updatedProjects = projects.map(p =>
+      p.id === currentProjectId
+        ? {
+            ...p,
+            materials: p.materials.map(m => m.id === id ? { ...m, ...data } : m),
+            updatedAt: new Date().toISOString(),
+          }
+        : p
+    );
+
+    const updatedCurrent = updatedProjects.find(p => p.id === currentProjectId);
+    set({
+      projects: updatedProjects,
+      currentProject: updatedCurrent || null,
     });
     get()._persist();
   },
@@ -514,32 +536,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     get()._persist();
   },
 
-  exportProject: async (files?: ExportFile[]) => {
-    const { currentProject } = get();
-    if (!currentProject) return;
-
-    set({ isLoading: true });
-    try {
-      await createExportPackage(currentProject, currentProject.exportConfig);
-      if (files && files.length > 0) {
-        get().addExportHistory(files);
-      }
-    } catch (error) {
-      set({ error: '导出失败，请重试' });
-    } finally {
-      set({ isLoading: false });
-    }
-  },
-
-  addExportHistory: (files: ExportFile[]) => {
+  addDeliveryRecord: (record: DeliveryRecord) => {
     set(state => ({
-      exportHistory: [...files, ...state.exportHistory].slice(0, 100)
+      deliveryRecords: [record, ...state.deliveryRecords].slice(0, 50)
     }));
     get()._persist();
   },
 
-  clearExportHistory: () => {
-    set({ exportHistory: [] });
+  clearDeliveryRecords: () => {
+    set({ deliveryRecords: [] });
     get()._persist();
   },
 
@@ -549,7 +554,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projects: state.projects,
       currentProjectId: state.currentProjectId,
       activeTab: state.activeTab,
-      exportHistory: state.exportHistory,
+      deliveryRecords: state.deliveryRecords,
     });
   },
 }));

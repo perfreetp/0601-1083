@@ -12,6 +12,8 @@ export interface ColorScheme {
   contrast: string[];
 }
 
+export type AuthStatus = 'verified' | 'pending' | 'missing';
+
 export interface Material {
   id: string;
   type: MaterialType;
@@ -21,6 +23,8 @@ export interface Material {
   description: string;
   tags: string[];
   authScope?: string[];
+  authStatus?: AuthStatus;
+  contentSummary?: string;
   createdAt: string;
 }
 
@@ -130,4 +134,30 @@ export interface User {
   name: string;
   role: 'designer' | 'reviewer' | 'admin';
   avatar: string;
+}
+
+export interface DeliveryLayoutItem {
+  type: string;
+  name: string;
+  size: string;
+  formats: string[];
+  previewUrl?: string;
+}
+
+export interface DeliveryRecord {
+  id: string;
+  projectId: string;
+  projectName: string;
+  museumName: string;
+  createdAt: string;
+  layouts: DeliveryLayoutItem[];
+  formats: string[];
+  fileCount: number;
+  includeSpec: boolean;
+  includePreview: boolean;
+  dpi: number;
+  namingRule: string;
+  packageContent: string;
+  files: ExportFile[];
+  totalSize: number;
 }

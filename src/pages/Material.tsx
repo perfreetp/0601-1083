@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from 'react';
-import { Upload, Image, FileText, Shield, X, Search, Plus, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { Upload, Image, FileText, Shield, X, Search, Plus, CheckCircle2, Loader2, AlertCircle, Edit, Save } from 'lucide-react';
 import { useProjectStore } from '@/store/useProjectStore';
 import { MaterialCard } from '@/components/common/MaterialCard';
 import { cn } from '@/lib/utils';
-import type { Material, MaterialType } from '@/types';
+import type { Material, MaterialType, AuthStatus } from '@/types';
 
 const tabs = [
   { id: 'all', label: '全部', icon: null },
@@ -26,7 +26,8 @@ const scopeKeywords = [
   '纪念品包装', '文具', '饰品', '家居用品', '服装', '数码配件',
   '食品包装', '茶具', '丝绸', '陶瓷', '印刷品', '数字产品',
   '线上销售', '线下销售', '宣传推广', '商品开发', '文创产品',
-  '授权品类', '授权范围', '使用范围', '适用范围',
+  '授权品类', '授权范围', '使用范围', '适用范围', '包装设计', '品牌授权',
+  '博物馆文创', '零售', '批发', '电商', '实体店', '礼品定制',
 ];
 
 const extractAuthScopes = (text: string): string[] => {
@@ -38,8 +39,9 @@ const extractAuthScopes = (text: string): string[] => {
   }
   
   const patterns = [
-    /(?:授权范围|授权品类|使用范围|适用范围)[：:]\s*([^\n。；;]+)/,
-    /(?:品类|产品)[：:]\s*([^\n。；;]+)/,
+    /(?:授权范围|授权品类|使用范围|适用范围|许可范围)[：:]\s*([^\n。；;]+)/,
+    /(?:品类|产品类型|产品品类)[：:]\s*([^\n。；;]+)/,
+    /(?:销售渠道|授权渠道)[：:]\s*([^\n。；;]+)/,
   ];
   
   for (const pattern of patterns) {
@@ -47,7 +49,7 @@ const extractAuthScopes = (text: string): string[] => {
     if (match) {
       const items = match[1].split(/[、,，；;\/]/).map(s => s.trim()).filter(Boolean);
       for (const item of items) {
-        if (item.length <= 10 && !found.includes(item)) {
+        if (item.length <= 12 && !found.includes(item)) {
           found.push(item);
         }
       }
@@ -58,37 +60,75 @@ const extractAuthScopes = (text: string): string[] => {
     if (text.includes('文创') || text.includes('文化')) found.push('文创产品');
     if (text.includes('销售')) found.push('线上线下销售');
     if (text.includes('宣传') || text.includes('推广')) found.push('宣传推广');
+    if (text.includes('包装')) found.push('包装设计');
+    if (text.includes('零售') || text.includes('电商')) found.push('零售');
   }
   
   return found.slice(0, 8);
 };
 
+const generateSummary = (text: string, type: MaterialType): string => {
+  if (!text) return '';
+  const maxLen = 120;
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (type === 'auth') {
+    const authMatch = cleaned.match(/(?:授权方|甲方|许可方)[：:]\s*([^\n,，；;]{2,30})/);
+    const scopeMatch = cleaned.match(/(?:授权范围|许可范围|使用范围)[：:]\s*([^\n。]{2,50})/);
+    const periodMatch = cleaned.match(/(?:授权期限|有效期|期限)[：:]\s*([^\n,，。；;]{2,30})/);
+    const parts: string[] = [];
+    if (authMatch) parts.push(`授权方: ${authMatch[1].trim()}`);
+    if (scopeMatch) parts.push(`范围: ${scopeMatch[1].trim()}`);
+    if (periodMatch) parts.push(`期限: ${periodMatch[1].trim()}`);
+    if (parts.length > 0) return parts.join('；');
+  }
+  if (cleaned.length <= maxLen) return cleaned;
+  return cleaned.slice(0, maxLen) + '...';
+};
+
+const isTextFile = (file: File): boolean => {
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  return file.type.includes('text') 
+    || ext === 'txt' || ext === 'md' || ext === 'rtf'
+    || ext === 'csv'
+    || (file.type === 'application/pdf')
+    || (file.type.includes('word') || file.type.includes('document'))
+    || ext === 'doc' || ext === 'docx';
+};
+
+const readTextFile = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    if (ext === 'pdf' || ext === 'doc' || ext === 'docx') {
+      resolve(`[${file.name}] 文件内容需人工确认。文件名: ${file.name}, 大小: ${(file.size / 1024).toFixed(1)}KB, 类型: ${file.type || ext.toUpperCase()}。请查阅原文件获取完整授权信息。`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(String(e.target?.result || ''));
+    reader.onerror = () => resolve('');
+    reader.readAsText(file, 'UTF-8');
+  });
+};
+
 export default function Material() {
-  const { currentProject, addMaterial, removeMaterial } = useProjectStore();
+  const { currentProject, addMaterial, removeMaterial, updateMaterial } = useProjectStore();
   const [activeTab, setActiveTab] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [uploadItems, setUploadItems] = useState<UploadItem[]>([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadType, setUploadType] = useState<MaterialType>('exhibit');
+  const [editingMaterial, setEditingMaterial] = useState<Material | null>(null);
+  const [editAuthScope, setEditAuthScope] = useState('');
 
   const materials = currentProject?.materials || [];
   const filteredMaterials = materials.filter((m) => {
     const matchesTab = activeTab === 'all' || m.type === activeTab;
     const matchesSearch = m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       m.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
+      m.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (m.authScope || []).some(s => s.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchesTab && matchesSearch;
   });
-
-  const readTextFile = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve(String(e.target?.result || ''));
-      reader.onerror = () => reject(new Error('读取文件失败'));
-      reader.readAsText(file, 'UTF-8');
-    });
-  };
 
   const handleDragOver = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); }, []);
   const handleDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); }, []);
@@ -108,8 +148,7 @@ export default function Material() {
         preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
       };
       
-      if ((uploadType === 'copy' || uploadType === 'auth') && 
-          (file.type.includes('text') || file.name.endsWith('.txt') || file.name.endsWith('.md'))) {
+      if ((uploadType === 'copy' || uploadType === 'auth') && isTextFile(file)) {
         try {
           const text = await readTextFile(file);
           item.content = text;
@@ -139,7 +178,10 @@ export default function Material() {
           clearInterval(interval);
           
           const isAuth = uploadItem.type === 'auth';
+          const isCopy = uploadItem.type === 'copy';
           const scopes = isAuth && uploadItem.content ? extractAuthScopes(uploadItem.content) : undefined;
+          const authStatus: AuthStatus | undefined = isAuth ? (scopes && scopes.length > 0 ? 'verified' : 'pending') : undefined;
+          const summary = uploadItem.content ? generateSummary(uploadItem.content, uploadItem.type) : undefined;
           
           addMaterial({
             id: `m_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -148,9 +190,11 @@ export default function Material() {
             url: uploadItem.preview,
             content: uploadItem.content,
             description: isAuth ? (uploadItem.content ? '授权文件已解析' : '新上传的授权文件') : 
-                        uploadItem.content ? '文案内容已读取' : '新上传的素材',
-            tags: ['新上传', ...(isAuth && scopes ? ['已解析授权范围'] : [])],
-            authScope: scopes,
+                        isCopy ? (uploadItem.content ? '文案内容已读取' : '新上传的文案素材') : '新上传的素材',
+            tags: ['新上传', ...(isAuth && scopes && scopes.length > 0 ? ['已解析授权范围'] : []), ...(isAuth && (!scopes || scopes.length === 0) ? ['待补充授权范围'] : [])],
+            authScope: scopes && scopes.length > 0 ? scopes : undefined,
+            authStatus,
+            contentSummary: summary,
             createdAt: new Date().toISOString(),
           });
           
@@ -167,6 +211,24 @@ export default function Material() {
     });
   };
 
+  const handleEditMaterial = (material: Material) => {
+    if (material.type === 'auth') {
+      setEditingMaterial(material);
+      setEditAuthScope((material.authScope || []).join('、'));
+    }
+  };
+
+  const handleSaveAuthScope = () => {
+    if (!editingMaterial) return;
+    const scopes = editAuthScope.split(/[、,，;；\s]+/).map(s => s.trim()).filter(Boolean);
+    updateMaterial(editingMaterial.id, {
+      authScope: scopes.length > 0 ? scopes : undefined,
+      authStatus: scopes.length > 0 ? 'verified' : 'pending',
+      tags: [...editingMaterial.tags.filter(t => t !== '待补充授权范围' && t !== '已解析授权范围'), ...(scopes.length > 0 ? ['已解析授权范围'] : ['待补充授权范围'])],
+    });
+    setEditingMaterial(null);
+  };
+
   const stats = [
     { type: 'exhibit', count: materials.filter(m => m.type === 'exhibit').length },
     { type: 'pattern', count: materials.filter(m => m.type === 'pattern').length },
@@ -181,7 +243,7 @@ export default function Material() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-serif font-bold text-gray-900 mb-2">素材管理</h1>
-          <p className="text-gray-500">管理项目素材，支持上传、分类、搜索和预览；文案和授权文件会自动读取内容</p>
+          <p className="text-gray-500">管理项目素材，文案和授权文件自动读取内容并解析授权范围</p>
         </div>
         <div className="flex gap-3">
           <div className="relative">
@@ -192,7 +254,7 @@ export default function Material() {
           <button onClick={() => document.getElementById('fileInput')?.click()} className="btn-primary flex items-center gap-2">
             <Plus className="w-5 h-5" /> 上传素材
           </button>
-          <input id="fileInput" type="file" multiple accept="image/*,.txt,.md,.doc,.docx,.pdf,.rtf" className="hidden"
+          <input id="fileInput" type="file" multiple accept="image/*,.txt,.md,.doc,.docx,.pdf,.rtf,.csv" className="hidden"
             onChange={(e) => e.target.files && handleFiles(Array.from(e.target.files))} />
         </div>
       </div>
@@ -237,7 +299,7 @@ export default function Material() {
           <p className="font-medium text-gray-700">{isDragging ? '松开鼠标上传文件' : '拖拽文件到此处上传，或点击右上角按钮'}</p>
           <p className="text-sm text-gray-500">
             {uploadType === 'copy' || uploadType === 'auth' 
-              ? 'TXT/MD/PDF/DOC等文本文件会自动读取内容，授权文件会自动解析授权范围' 
+              ? 'TXT/MD/PDF/DOC/CSV等文本文件会自动读取内容，授权文件会自动解析授权范围' 
               : '支持 JPG、PNG、GIF、PDF、TXT 等格式，图片会生成预览'}
           </p>
           <div className="flex items-center gap-2 mt-1">
@@ -253,6 +315,7 @@ export default function Material() {
             <div className="flex items-center gap-1 mt-1 px-3 py-1.5 bg-teal-50 rounded-full text-xs text-teal-700">
               <AlertCircle className="w-3.5 h-3.5" />
               文本模式：上传后自动读取文件内容
+              {uploadType === 'auth' && '，解析授权范围'}
             </div>
           )}
         </div>
@@ -262,7 +325,7 @@ export default function Material() {
         <div className="grid grid-cols-4 gap-4">
           {filteredMaterials.map((material, index) => (
             <div key={material.id} className={cn('animate-slide-up', `stagger-${(index % 6) + 1}`)}>
-              <MaterialCard material={material} onDelete={removeMaterial} />
+              <MaterialCard material={material} onDelete={removeMaterial} onEdit={handleEditMaterial} />
             </div>
           ))}
         </div>
@@ -310,7 +373,13 @@ export default function Material() {
                     {item.content && item.status === 'success' && (
                       <p className="text-[10px] text-teal-600 mt-1 flex items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" />
-                        {item.type === 'auth' ? `已读取内容，解析到 ${item.content.length > 0 ? '授权范围' : '文本'}` : `已读取文本内容 (${item.content.length}字)`}
+                        {item.type === 'auth' ? '已读取内容并解析授权范围' : `已读取文本内容 (${item.content.length}字)`}
+                      </p>
+                    )}
+                    {item.type === 'auth' && !item.content && item.status === 'success' && (
+                      <p className="text-[10px] text-amber-600 mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" />
+                        授权范围待补充
                       </p>
                     )}
                   </div>
@@ -328,12 +397,47 @@ export default function Material() {
               <div className="text-xs text-gray-500">
                 {uploadItems.filter(i => i.status === 'success').length} / {uploadItems.length} 完成
                 {uploadItems.some(i => i.content) && uploadItems.filter(i => i.status === 'success').length > 0 && (
-                  <span className="ml-2 text-teal-600">
-                    (含文本内容)
-                  </span>
+                  <span className="ml-2 text-teal-600">(含文本内容)</span>
                 )}
               </div>
               <button onClick={() => setShowUploadModal(false)} className="btn-secondary">关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingMaterial && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-hover w-full max-w-md mx-4 animate-slide-up">
+            <div className="p-4 border-b border-stone-200 flex items-center justify-between">
+              <h3 className="font-serif font-bold text-lg flex items-center gap-2">
+                <Shield className="w-5 h-5 text-orange-500" /> 编辑授权范围
+              </h3>
+              <button onClick={() => setEditingMaterial(null)} className="p-2 hover:bg-stone-100 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4">
+              <p className="text-sm text-gray-700 mb-1 font-medium">{editingMaterial.name}</p>
+              {editingMaterial.contentSummary && (
+                <p className="text-xs text-gray-500 mb-4 line-clamp-2">{editingMaterial.contentSummary}</p>
+              )}
+              <label className="input-label">授权范围（用顿号或逗号分隔）</label>
+              <input type="text" value={editAuthScope} onChange={(e) => setEditAuthScope(e.target.value)}
+                className="input-field mb-3" placeholder="例如：文创产品、线上销售、包装设计" />
+              <p className="text-xs text-gray-400">常用范围：文创产品、线上销售、线下销售、包装设计、宣传推广、零售、电商</p>
+              {editingMaterial.authStatus === 'pending' && (
+                <div className="mt-3 p-2 bg-amber-50 rounded-lg flex items-center gap-2 text-xs text-amber-700">
+                  <AlertCircle className="w-4 h-4" />
+                  当前状态：待补充授权范围
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-stone-200 flex justify-end gap-3">
+              <button onClick={() => setEditingMaterial(null)} className="btn-secondary">取消</button>
+              <button onClick={handleSaveAuthScope} className="btn-primary flex items-center gap-2">
+                <Save className="w-4 h-4" /> 保存
+              </button>
             </div>
           </div>
         </div>

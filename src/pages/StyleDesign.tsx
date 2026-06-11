@@ -17,6 +17,7 @@ import {
 import { useProjectStore } from '@/store/useProjectStore';
 import { styleOptions, layoutOptions } from '@/utils/mockData';
 import { cn } from '@/lib/utils';
+import { AuthCheck } from '@/components/common/AuthCheck';
 import type { DesignStyle, LayoutType } from '@/types';
 
 const styleIcons: Record<string, React.ElementType> = {
@@ -297,6 +298,8 @@ export default function StyleDesign() {
               </div>
             )}
           </div>
+
+          <AuthCheck materials={currentProject?.materials || []} />
         </div>
       </div>
     </div>

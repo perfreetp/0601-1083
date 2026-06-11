@@ -424,9 +424,9 @@ export const styleOptions = [
 ];
 
 export const layoutOptions = [
-  { id: 'box', name: '盒套', description: '产品外包装盒', icon: 'Package', size: '200×150mm' },
-  { id: 'tag', name: '吊牌', description: '产品挂签', icon: 'Tag', size: '60×100mm' },
-  { id: 'sticker', name: '贴纸', description: '装饰贴纸', icon: 'Sticker', size: '80×80mm' },
-  { id: 'bag', name: '手提袋', description: '购物手提袋', icon: 'ShoppingBag', size: '300×400mm' },
-  { id: 'card', name: '说明卡', description: '产品说明卡片', icon: 'FileText', size: '120×180mm' }
+  { id: 'box', name: '盒套', description: '产品外包装盒', icon: 'Package', size: '200×150mm', widthMm: 200, heightMm: 150 },
+  { id: 'tag', name: '吊牌', description: '产品挂签', icon: 'Tag', size: '60×100mm', widthMm: 60, heightMm: 100 },
+  { id: 'sticker', name: '贴纸', description: '装饰贴纸', icon: 'Sticker', size: '80×80mm', widthMm: 80, heightMm: 80 },
+  { id: 'bag', name: '手提袋', description: '购物手提袋', icon: 'ShoppingBag', size: '300×400mm', widthMm: 300, heightMm: 400 },
+  { id: 'card', name: '说明卡', description: '产品说明卡片', icon: 'FileText', size: '120×180mm', widthMm: 120, heightMm: 180 }
 ];
